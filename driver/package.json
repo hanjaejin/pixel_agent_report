@@ -1,0 +1,28 @@
+{
+  "name": "pixel-agents-openrouter-driver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude 없이 OpenRouter SLM으로 픽셀 오피스 에이전트를 구동하는 드라이버",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "start:env": "node --env-file=.env --import tsx src/index.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:env": "node --env-file=.env --import tsx scripts/smoke.ts",
+    "check:integration": "tsx scripts/integration-check.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
