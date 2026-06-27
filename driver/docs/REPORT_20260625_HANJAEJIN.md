@@ -18,6 +18,9 @@
 | 라이브 검증 | 실서버 기동 → 훅 200, 에이전트 채택/활동/퇴장 확인. 실제 OpenRouter로 3명 한국어 추론 동작 확인 |
 | 산출물 | 소스 9모듈 + 스크립트 2 + 테스트 9파일 + ADR 12 + 단계보고서 8 + 테스트로그 + README + 초보자 매뉴얼 |
 
+> 📌 **1차 PoC(아래 1~12장) 이후 추가기능 F1~F6(PLAN_2)을 진행했습니다 → [13장](#13-2차-작업--추가기능-f1f6-plan_2)**.
+> 2차에서 테스트 **58 → 98**, ADR **013~020** 추가, F5·F6 는 풀스택(core/server/webview 포함).
+
 ---
 
 ## 1. 이 프로그램이 하는 일
@@ -274,12 +277,91 @@ npm run start:env    # 진짜 AI
 
 ---
 
+## 13. 2차 작업 — 추가기능 F1~F6 (PLAN_2)
+
+1차 PoC(1~12장) 완료 후, 6가지 추가기능을 같은 방식(TDD·ADR·한국어·단계별)으로 얹었습니다.
+계획서는 `docs/PLAN_2.md`, 결정은 `ADR-013~020`, 단계 보고서는 `STAGE-F1~F6`.
+
+### 13-0. 한눈에 보기 (2차)
+
+| 항목 | 내용 |
+|------|------|
+| 추가 기능 | F1 agents.json 외부화 · F2 페르소나 · F3 SKILL.md · F4 모델 폴백 · F5 화면 모델선택(풀스택) · F6 한↔영 |
+| 테스트 | driver **58 → 98** + server(driverControl) + webview i18n. 전 패키지 타입체크/lint/build 통과 |
+| 범위 변경 | F1~F4 는 driver-only(상위 무수정). **F5·F6 는 사용자 승인하에 `core/`·`server/`·`webview-ui/` 수정 허용** |
+| 신규 ADR | 013~020 (8건) |
+
+### 13-1. F1 — 에이전트 정의 외부화 (`agents.json`)  *(driver)*
+- 신규 `src/agentsFile.ts`: `agents.json`(또는 `PIXEL_AGENTS_FILE`)을 읽어 **필드 단위 검증** + "몇 번째 항목의 어떤 필드가 왜 틀렸는지" **친절한 한국어 에러**. 파일 없으면 코드 기본값으로 폴백(회귀 0).
+- `AgentDefinition` 확장: `persona?`, `skillFile?`, `fallbackModels?`. (ADR-013)
+
+### 13-2. F2 — 페르소나(성격/말투)  *(driver)*
+- `systemPromptFor(name, persona?)`가 성격 줄을 시스템 프롬프트에 주입 → 행동·이유(reason)에 반영. (ADR-014)
+
+### 13-3. F3 — SKILL.md 참조  *(driver)*
+- 신규 `src/skills.ts`: `loadSkill(path, …, maxLen=4000)` — 없는 파일 graceful, **길이 상한으로 토큰 비용 보호**. SKILL 내용을 "참고 자료" 블록으로 주입(index가 로드, agent는 순수 유지). (ADR-015)
+
+### 13-4. F4 — 모델 폴백(자동 대체)  *(driver)*
+- `openrouter.ts`에 `OpenRouterError{status}` 도입. **영구 에러(400/401/402/404)** → `fallbackModels`로 자동 전환, **일시 에러(429/5xx)** → 기존 지수 백오프. 라이브에서 겪은 404/402/429를 멈춤 없이 처리. (ADR-016)
+
+### 13-5. F5 — 화면에서 모델 선택  *(풀스택: core·server·webview·driver)*
+"드라이버는 훅을 보내기만 하고 받지 않는다"는 한계를 풀기 위해 **server↔driver 제어 채널**을 신설.
+
+| 계층 | 변경 |
+|------|------|
+| core | `asyncapi.yaml`에 `agentModels`/`setAgentModel`/`AgentModelEntry` 추가 → `messages.ts` 재생성(드리프트 0) |
+| server | 신규 `driverControl.ts` + `POST /api/driver/state`·`GET /api/driver/commands` + `setAgentModel` 핸들(agentId↔sessionId 매핑) + `agentModels` broadcast |
+| driver | `office.reportDriverState/pollCommands` + 1.5s **제어 루프**(`runControlTick`) + `Agent.getModel/setModel` 런타임 hot-swap |
+| webview | Settings 에 **"Agent Models" 드롭다운**(`agentModels` 수신, `setAgentModel` 송신) |
+
+브라우저 Settings 에서 모델을 바꾸면 **다음 행동부터 즉시 적용**. (ADR-017/019/020)
+
+### 13-6. F6 — 한↔영 전환  *(webview UI + 드라이버 로그)*
+- webview: 신규 `i18n.ts`(ko/en + localStorage) + Settings "한국어" 토글로 UI 텍스트 전환.
+- driver: 신규 `src/i18n.ts` + `describeAction(…, lang)` + `PIXEL_LANG`(기본 ko).
+- 범위 결정(승인 A): 오피스 캔버스 **활동 라벨("Reading…")은 서버 공유 provider 포맷이라 영어 유지**. (ADR-018)
+
+### 13-7. 2차 신규/변경 파일
+
+- driver 신규: `agentsFile.ts`, `skills.ts`, `i18n.ts`, `agents.example.json`, `skills/example-김대리.md`
+- driver 변경: `config.ts`, `agent.ts`, `actions.ts`, `openrouter.ts`, `office.ts`, `index.ts`, scripts
+- server 신규/변경: `driverControl.ts`(신규), `httpServer.ts`, `clientMessageHandler.ts`, `__tests__/driverControl.test.ts`
+- core 변경: `asyncapi.yaml`, `src/messages.ts`(재생성)
+- webview 신규/변경: `i18n.ts`(신규), `App.tsx`, `components/SettingsModal.tsx`, `hooks/useExtensionMessages.ts`, `test/i18n.test.ts`
+
+### 13-8. 2차 누적 테스트 (driver 98개)
+
+| 모듈 | 개수 | 모듈 | 개수 |
+|------|------|------|------|
+| logger | 4 | config | 12 |
+| office | 12 | orchestrator | 5 |
+| openrouter | 11 | backoff | 3 |
+| actions | 8 | semaphore | 3 |
+| agent | 20 | agentsFile (F1) | 11 |
+| skills (F3) | 5 | i18n (F6) | 3 |
+| **합계** | | | **98** |
+
+추가로 server `driverControl.test.ts`, webview `i18n.test.ts` 통과, core 프로토콜 재생성 멱등(드리프트 0).
+
+### 13-9. 2차 라이브 중 발견·해결
+
+| 발견 | 원인 | 해결 |
+|------|------|------|
+| 진짜 AI 401 | API 키를 루트 `.env`에 넣음(드라이버는 `driver/.env` 사용) | 키를 `driver/.env`로 이동(+CRLF 정리) |
+| 모델 404/402/429 | 예시 모델 ID 무효 / 무료모델 한도·레이트리밋 | 유효한 저렴 유료 소형모델 + F4 폴백으로 해소 |
+| 바닥/가구 없이 **마젠타 화면** | 저장된 `~/.pixel-agents/layout.json` 손상(30×15인데 타일 1개) | 손상 파일 삭제 → 기본 레이아웃 복구(README 문제해결에 반영) |
+
+### 13-10. 알려진 한계(2차)
+- **오피스 화면 라벨이 전부 `driver`**: 에이전트 이름(김대리…)은 드라이버 **터미널 로그에만** 표시. 오피스 라벨은 워크스페이스 폴더명을 쓰기 때문. 이름을 화면에 띄우려면 F5 제어 채널을 한 번 더 확장해야 함(향후).
+
+---
+
 ## 부록: 관련 문서 빠른 링크
 
-- 실행계획: [docs/PLAN.md](docs/PLAN.md)
+- 실행계획(1차): [docs/PLAN.md](docs/PLAN.md) · 추가기능 계획(2차): [docs/PLAN_2.md](docs/PLAN_2.md)
 - 역공학 분석: [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
 - 드라이버 README: [driver/README.md](driver/README.md)
-- 초보자 매뉴얼: [driver/docs/사용설명서.md](driver/docs/사용설명서.md)
-- 테스트 로그: [driver/docs/TEST_LOG.md](driver/docs/TEST_LOG.md)
-- ADR: [driver/docs/adr/](driver/docs/adr/)
-- 단계별 보고서: [driver/docs/reports/](driver/docs/reports/)
+- 초보자 매뉴얼: [docs/사용설명서.md](docs/사용설명서.md) · 리얼테스트 가이드: [docs/리얼테스트_가이드.md](docs/리얼테스트_가이드.md)
+- 테스트 로그: [docs/TEST_LOG.md](docs/TEST_LOG.md)
+- ADR(001~020): [docs/adr/](docs/adr/)
+- 단계별 보고서(STAGE-1~8, F1~F6): [docs/reports/](docs/reports/)
