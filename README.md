@@ -18,6 +18,10 @@
 | 라이브 검증 | 실서버 기동 → 훅 200, 에이전트 채택/활동/퇴장 확인. 실제 OpenRouter로 3명 한국어 추론 동작 확인 |
 | 산출물 | 소스 9모듈 + 스크립트 2 + 테스트 9파일 + ADR 12 + 단계보고서 8 + 테스트로그 + README + 초보자 매뉴얼 |
 
+> 📌 위 0~12장은 **1차 PoC**입니다. 이후 **추가 기능 F1~F6**(페르소나·SKILL·모델폴백·화면 모델선택·한↔영)을
+> 진행했습니다 → **[13장: 추가 기능·동작방법·원본 대비 변경점](#13-추가-기능-f1f6--동작-방법예시원본-대비-변경점)**.
+> 2차에서 테스트 **58→98**, **F5·F6은 원본 `core/`·`server/`·`webview-ui/`까지 수정**(승인 범위).
+
 ---
 
 ## 1. 이 프로그램이 하는 일
@@ -274,12 +278,160 @@ npm run start:env    # 진짜 AI
 
 ---
 
+# 13. 추가 기능 (F1~F6) — 동작 방법·예시·원본 대비 변경점
+
+1차 PoC(1~12장) 위에 6가지 기능을 얹었습니다. **F1~F4는 `driver/`만** 수정했고,
+**F5·F6은 (사용자 승인하에) 원본 `core/`·`server/`·`webview-ui/`까지** 수정했습니다.
+계획: `driver/docs/PLAN_2.md` · 결정: `ADR-013~020` · 단계 보고서: `STAGE-F1~F6`.
+
+| 기능 | 한 줄 | 범위 | 켜는 법 |
+|------|-------|------|---------|
+| F1 | 에이전트를 `agents.json` 파일로 정의 | driver | `agents.json` 생성 |
+| F2 | 에이전트별 성격(페르소나) | driver | `persona` 필드 |
+| F3 | 에이전트별 `SKILL.md` 참고 | driver | `skillFile` 필드 |
+| F4 | 모델 실패 시 자동 대체 | driver | `fallbackModels` 필드 |
+| F5 | 화면에서 모델 선택 | **풀스택** | 브라우저 Settings |
+| F6 | 화면/로그 한↔영 전환 | webview+driver | Settings 토글 / `PIXEL_LANG` |
+
+---
+
+## 13.1 F1 — 에이전트 정의 외부화 (`agents.json`)
+
+**무엇:** 코드를 안 고치고 에이전트를 추가/수정. 잘못된 설정은 위치 포함 **한국어 에러**로 즉시 안내.
+
+**동작 방법**
+```bash
+cd driver
+copy agents.example.json agents.json   # (Windows) / cp agents.example.json agents.json
+# agents.json 편집 후
+npm run start:env
+```
+우선순위: `PIXEL_AGENTS_FILE` 지정 → `cwd/agents.json` → 코드 기본값(파일 없으면 기존 동작 유지).
+
+**예시 (`agents.json`)**
+```jsonc
+[
+  { "name": "김대리", "model": "meta-llama/llama-3.2-3b-instruct" },
+  { "name": "박사원", "model": "qwen/qwen-2.5-7b-instruct" }
+]
+```
+**친절한 에러 예시** — `model` 줄을 지우면:
+```
+에이전트 설정 오류: agents[1](박사원).model 이 비어 있거나 문자열이 아닙니다.
+```
+
+## 13.2 F2 — 페르소나(성격/말투)
+
+**무엇:** `persona` 를 시스템 프롬프트에 주입 → 행동·이유(reason)에 성격 반영.
+
+**동작 방법 / 예시**
+```jsonc
+{ "name": "김대리", "model": "…", "persona": "꼼꼼하고 신중한 성격. 시작 전 항상 확인한다." }
+```
+→ 로그: `[김대리] 📖 config.ts 파일을 살펴보고 있어요 (먼저 설정을 확인하려고)` 처럼 신중한 이유가 붙음.
+
+## 13.3 F3 — SKILL.md 참조
+
+**무엇:** `skillFile` 의 마크다운(역할·규칙)을 "참고 자료"로 주입. 길이 상한(4000자)으로 토큰 보호, 파일 없어도 안전.
+
+**동작 방법 / 예시**
+```jsonc
+{ "name": "김대리", "model": "…", "skillFile": "skills/example-김대리.md" }
+```
+`skills/example-김대리.md` 에 "작업 전 항상 먼저 읽어라" 라고 적으면, 김대리는 **read(📖)로 시작**하는 경향이 강해집니다.
+
+## 13.4 F4 — 모델 폴백(자동 대체)
+
+**무엇:** 영구 에러(404/402/401)면 `fallbackModels` 로 자동 전환, 일시 에러(429/5xx)는 지수 백오프.
+
+**동작 방법 / 예시** — 일부러 없는 모델로 테스트:
+```jsonc
+{ "name": "박사원", "model": "fake/does-not-exist",
+  "fallbackModels": ["qwen/qwen-2.5-7b-instruct"] }
+```
+→ 로그: `⚠️ 모델 fake/does-not-exist 사용 불가(HTTP 404) → qwen/qwen-2.5-7b-instruct 로 전환합니다` 후 **계속 동작**.
+
+## 13.5 F5 — 화면에서 모델 선택 (풀스택)
+
+**무엇:** 브라우저 **Settings → "Agent Models"** 드롭다운에서 모델을 바꾸면 **다음 행동부터 즉시 적용**.
+
+**동작 방법**
+1. 서버·드라이버 실행, 브라우저 접속(새로고침 금지).
+2. 설정(⚙️) 하단 **Agent Models** 에서 에이전트별 드롭다운 변경.
+3. 드라이버가 1.5초마다 상태 보고/명령 폴링 → 새 모델로 호출. 끄려면 `PIXEL_PANEL=0`.
+
+**데이터 흐름**
+```
+driver ─POST /api/driver/state→ server ─(agentModels)→ webview(드롭다운)
+webview ─(setAgentModel)→ server(agentId→sessionId, 명령큐) ←GET /api/driver/commands─ driver(setModel)
+```
+
+## 13.6 F6 — 한↔영 전환
+
+**무엇:** 화면 UI 텍스트(Settings)와 드라이버 로그를 ko/en 전환. (오피스 활동 라벨 "Reading…"은 공유 부분이라 영어 유지.)
+
+**동작 방법**
+- 화면: Settings → **"한국어"** 체크 → Settings 텍스트 전환(localStorage 유지).
+- 로그: `driver/.env` 에 `PIXEL_LANG=en` → `📖 Looking at config.ts` 처럼 영어로.
+
+---
+
+## 13.7 원본(upstream)에서 무엇을 어떻게 바꿨는지
+
+> F1~F4 는 `driver/`(신규 폴더)만 추가했으므로 **원본 파일 수정 없음**.
+> **F5·F6 에서만** 아래 원본 파일을 수정했습니다(승인 범위).
+
+### core (프로토콜)
+| 파일 | 원본 | 변경 | 왜 |
+|------|------|------|----|
+| `core/asyncapi.yaml` | 26 ServerMessage / 18 ClientMessage | **메시지 3종 추가**: `AgentModels`(server→client), `SetAgentModel`(client→server), `AgentModelEntry`(서브스키마) | 화면↔모델 선택 프로토콜 |
+| `core/src/messages.ts` | asyncapi 에서 자동 생성 | `npm run asyncapi:generate` 로 **재생성**(수기수정 금지·드리프트 0) | 위 메시지의 타입 |
+
+`asyncapi.yaml` 추가 예시:
+```yaml
+SetAgentModel:
+  type: object
+  additionalProperties: false
+  required: [type, id, model]
+  properties:
+    type: { const: setAgentModel }
+    id:   { type: integer }
+    model:{ type: string }
+```
+
+### server (제어 채널)
+| 파일 | 원본 | 변경 |
+|------|------|------|
+| `server/src/driverControl.ts` | (없음) | **신규**. `DriverControlState`(sessionId→모델 + 명령 큐) + `buildAgentModelsMessage`(agentId↔sessionId 매핑) |
+| `server/src/httpServer.ts` | 라우트: health / hooks / ws | **라우트 2개 추가**: `POST /api/driver/state`(보고→broadcast), `GET /api/driver/commands`(폴링). ws 핸들러에 `driverControl` 주입 |
+| `server/src/clientMessageHandler.ts` | webviewReady·settings 등 처리 | `setAgentModel` **케이스 추가**(agentId→sessionId 변환 후 명령 적재), webviewReady 에 `agentModels` 전송(보고 있을 때만 → 회귀 0) |
+
+> 식별자 매핑: 드라이버는 **session_id**로만 자신을 알리고, 서버가 store 로 **agent_id ↔ session_id** 를 변환. webview 는 agent_id 사용.
+
+### webview-ui (UI)
+| 파일 | 원본 | 변경 |
+|------|------|------|
+| `webview-ui/src/i18n.ts` | (없음) | **신규**. ko/en 사전 + 순수 `t(key,lang)` + localStorage 언어 |
+| `webview-ui/src/components/SettingsModal.tsx` | 설정 항목들(영어 고정) | **"Agent Models" 드롭다운**(F5) + 라벨을 `t()` 로 i18n + **"한국어" 토글**(F6) |
+| `webview-ui/src/hooks/useExtensionMessages.ts` | ServerMessage→상태 | `agentModels` **수신 처리**(availableModels/agentModels 상태) + 반환 |
+| `webview-ui/src/App.tsx` | 합성 루트 | `lang` 상태 + SettingsModal 에 F5/F6 props 전달(`setAgentModel`/`onToggleLanguage`) |
+
+> 규칙 준수: `asyncapi:generate` 드리프트 체크 통과, webview 픽셀 ESLint(색상/섀도/폰트) 0 위반, 기존 server/webview 테스트 회귀 0.
+
+### driver (신규 폴더, 2차 추가/변경)
+- **신규:** `agentsFile.ts`(F1), `skills.ts`(F3), `i18n.ts`(F6), `agents.example.json`, `skills/example-김대리.md`
+- **변경:** `config.ts`(agents.json 로드·`PIXEL_LANG`), `agent.ts`(persona/skill/모델 hot-swap/i18n), `openrouter.ts`(`OpenRouterError`), `actions.ts`(언어별 문구), `office.ts`(`reportDriverState`/`pollCommands`), `index.ts`(제어 루프)
+
+### 테스트 변화
+- driver 단위 테스트 **58 → 98**, server `driverControl.test.ts` 추가, webview `i18n.test.ts` 추가. 전 패키지 타입체크/빌드/lint 통과.
+
+---
+
 ## 부록: 관련 문서 빠른 링크
 
-- 실행계획: [docs/PLAN.md](docs/PLAN.md)
-- 역공학 분석: [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
-- 드라이버 README: [driver/README.md](driver/README.md)
-- 초보자 매뉴얼: [driver/docs/사용설명서.md](driver/docs/사용설명서.md)
+- 실행계획(1차): [driver/docs/PLAN.md](driver/docs/PLAN.md) · 추가기능(2차): [driver/docs/PLAN_2.md](driver/docs/PLAN_2.md)
+- 종합 리포트: [driver/docs/REPORT_20260625_HANJAEJIN.md](driver/docs/REPORT_20260625_HANJAEJIN.md)
+- 드라이버 README(기능별 사용법): [driver/README.md](driver/README.md)
+- 초보자 매뉴얼: [driver/docs/사용설명서.md](driver/docs/사용설명서.md) · 리얼테스트 가이드: [driver/docs/리얼테스트_가이드.md](driver/docs/리얼테스트_가이드.md)
 - 테스트 로그: [driver/docs/TEST_LOG.md](driver/docs/TEST_LOG.md)
-- ADR: [driver/docs/adr/](driver/docs/adr/)
-- 단계별 보고서: [driver/docs/reports/](driver/docs/reports/)
+- ADR(001~020): [driver/docs/adr/](driver/docs/adr/) · 단계별 보고서: [driver/docs/reports/](driver/docs/reports/)
