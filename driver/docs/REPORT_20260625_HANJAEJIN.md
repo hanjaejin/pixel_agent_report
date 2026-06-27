@@ -292,42 +292,112 @@ npm run start:env    # 진짜 AI
 | 신규 ADR | 013~020 (8건) |
 
 ### 13-1. F1 — 에이전트 정의 외부화 (`agents.json`)  *(driver)*
-- 신규 `src/agentsFile.ts`: `agents.json`(또는 `PIXEL_AGENTS_FILE`)을 읽어 **필드 단위 검증** + "몇 번째 항목의 어떤 필드가 왜 틀렸는지" **친절한 한국어 에러**. 파일 없으면 코드 기본값으로 폴백(회귀 0).
-- `AgentDefinition` 확장: `persona?`, `skillFile?`, `fallbackModels?`. (ADR-013)
+**무엇:** 코드 수정 없이 에이전트 추가/수정. 잘못된 설정은 위치 포함 한국어 에러. (ADR-013)
+**동작 방법**
+```bash
+cd driver
+cp agents.example.json agents.json   # 편집 후
+npm run start:env
+```
+우선순위: `PIXEL_AGENTS_FILE` → `cwd/agents.json` → 코드 기본값(없으면 기존 동작 유지).
+**예시 / 친절한 에러**
+```jsonc
+[ { "name": "김대리", "model": "meta-llama/llama-3.2-3b-instruct" } ]
+```
+```
+// model 줄을 지우면:
+에이전트 설정 오류: agents[1](박사원).model 이 비어 있거나 문자열이 아닙니다.
+```
 
 ### 13-2. F2 — 페르소나(성격/말투)  *(driver)*
-- `systemPromptFor(name, persona?)`가 성격 줄을 시스템 프롬프트에 주입 → 행동·이유(reason)에 반영. (ADR-014)
+**무엇:** `persona` 를 시스템 프롬프트에 주입 → 행동·이유에 성격 반영. (ADR-014)
+**동작/예시**
+```jsonc
+{ "name": "김대리", "model": "…", "persona": "꼼꼼하고 신중한 성격. 시작 전 항상 확인한다." }
+```
+→ 로그: `[김대리] 📖 config.ts 파일을 살펴보고 있어요 (먼저 설정을 확인하려고)`
 
 ### 13-3. F3 — SKILL.md 참조  *(driver)*
-- 신규 `src/skills.ts`: `loadSkill(path, …, maxLen=4000)` — 없는 파일 graceful, **길이 상한으로 토큰 비용 보호**. SKILL 내용을 "참고 자료" 블록으로 주입(index가 로드, agent는 순수 유지). (ADR-015)
+**무엇:** `skillFile` 마크다운을 "참고 자료"로 주입. 길이 상한(4000자)·없는 파일 graceful. (ADR-015)
+**동작/예시**
+```jsonc
+{ "name": "김대리", "model": "…", "skillFile": "skills/example-김대리.md" }
+```
+SKILL에 "작업 전 항상 먼저 읽어라"를 적으면 김대리는 **read(📖)로 시작**하는 경향이 강해짐.
 
 ### 13-4. F4 — 모델 폴백(자동 대체)  *(driver)*
-- `openrouter.ts`에 `OpenRouterError{status}` 도입. **영구 에러(400/401/402/404)** → `fallbackModels`로 자동 전환, **일시 에러(429/5xx)** → 기존 지수 백오프. 라이브에서 겪은 404/402/429를 멈춤 없이 처리. (ADR-016)
+**무엇:** 영구 에러(404/402/401)→`fallbackModels` 자동 전환, 일시 에러(429/5xx)→지수 백오프. (ADR-016)
+**동작/예시** — 일부러 없는 모델로:
+```jsonc
+{ "name": "박사원", "model": "fake/does-not-exist",
+  "fallbackModels": ["qwen/qwen-2.5-7b-instruct"] }
+```
+→ 로그: `⚠️ 모델 fake/does-not-exist 사용 불가(HTTP 404) → qwen/qwen-2.5-7b-instruct 로 전환합니다` 후 계속 동작.
 
 ### 13-5. F5 — 화면에서 모델 선택  *(풀스택: core·server·webview·driver)*
+**무엇:** 브라우저 **Settings → "Agent Models"** 드롭다운으로 모델 변경 → 다음 행동부터 즉시 적용. (ADR-017/019/020)
+**동작 방법:** 서버·드라이버 실행 → 설정(⚙️) 하단 Agent Models 에서 변경. 끄려면 `PIXEL_PANEL=0`.
+**데이터 흐름**
+```
+driver ─POST /api/driver/state→ server ─(agentModels)→ webview(드롭다운)
+webview ─(setAgentModel)→ server(agentId→sessionId, 명령큐) ←GET /api/driver/commands─ driver(setModel)
+```
 "드라이버는 훅을 보내기만 하고 받지 않는다"는 한계를 풀기 위해 **server↔driver 제어 채널**을 신설.
 
-| 계층 | 변경 |
-|------|------|
-| core | `asyncapi.yaml`에 `agentModels`/`setAgentModel`/`AgentModelEntry` 추가 → `messages.ts` 재생성(드리프트 0) |
-| server | 신규 `driverControl.ts` + `POST /api/driver/state`·`GET /api/driver/commands` + `setAgentModel` 핸들(agentId↔sessionId 매핑) + `agentModels` broadcast |
-| driver | `office.reportDriverState/pollCommands` + 1.5s **제어 루프**(`runControlTick`) + `Agent.getModel/setModel` 런타임 hot-swap |
-| webview | Settings 에 **"Agent Models" 드롭다운**(`agentModels` 수신, `setAgentModel` 송신) |
-
-브라우저 Settings 에서 모델을 바꾸면 **다음 행동부터 즉시 적용**. (ADR-017/019/020)
-
 ### 13-6. F6 — 한↔영 전환  *(webview UI + 드라이버 로그)*
-- webview: 신규 `i18n.ts`(ko/en + localStorage) + Settings "한국어" 토글로 UI 텍스트 전환.
-- driver: 신규 `src/i18n.ts` + `describeAction(…, lang)` + `PIXEL_LANG`(기본 ko).
-- 범위 결정(승인 A): 오피스 캔버스 **활동 라벨("Reading…")은 서버 공유 provider 포맷이라 영어 유지**. (ADR-018)
+**무엇:** 화면 UI 텍스트(Settings)와 드라이버 로그를 ko/en 전환. (ADR-018)
+**동작 방법**
+- 화면: Settings → **"한국어"** 체크 → Settings 텍스트 전환(localStorage 유지).
+- 로그: `driver/.env` 에 `PIXEL_LANG=en` → `📖 Looking at config.ts` 처럼 영어로.
+- 범위(승인 A): 오피스 캔버스 **활동 라벨("Reading…")은 서버 공유 provider 포맷이라 영어 유지**.
 
-### 13-7. 2차 신규/변경 파일
+### 13-7. 원본(upstream)에서 무엇을 어떻게 바꿨는지 (파일별 상세)
 
-- driver 신규: `agentsFile.ts`, `skills.ts`, `i18n.ts`, `agents.example.json`, `skills/example-김대리.md`
-- driver 변경: `config.ts`, `agent.ts`, `actions.ts`, `openrouter.ts`, `office.ts`, `index.ts`, scripts
-- server 신규/변경: `driverControl.ts`(신규), `httpServer.ts`, `clientMessageHandler.ts`, `__tests__/driverControl.test.ts`
-- core 변경: `asyncapi.yaml`, `src/messages.ts`(재생성)
-- webview 신규/변경: `i18n.ts`(신규), `App.tsx`, `components/SettingsModal.tsx`, `hooks/useExtensionMessages.ts`, `test/i18n.test.ts`
+> F1~F4 는 `driver/`(신규)만 추가 → **원본 파일 수정 없음**. **F5·F6 에서만** 아래 원본을 수정(승인 범위).
+
+**core (프로토콜)**
+
+| 파일 | 원본 | 변경 |
+|------|------|------|
+| `core/asyncapi.yaml` | 26 ServerMsg / 18 ClientMsg | 메시지 **3종 추가**: `AgentModels`·`SetAgentModel`·`AgentModelEntry` |
+| `core/src/messages.ts` | asyncapi 자동 생성 | `npm run asyncapi:generate` **재생성**(수기수정 금지·드리프트 0) |
+
+```yaml
+# asyncapi.yaml 추가 예시
+SetAgentModel:
+  type: object
+  additionalProperties: false
+  required: [type, id, model]
+  properties:
+    type:  { const: setAgentModel }
+    id:    { type: integer }
+    model: { type: string }
+```
+
+**server (제어 채널)**
+
+| 파일 | 원본 | 변경 |
+|------|------|------|
+| `server/src/driverControl.ts` | (없음) | **신규**. `DriverControlState`(sessionId→모델+명령큐) + `buildAgentModelsMessage`(agentId↔sessionId) |
+| `server/src/httpServer.ts` | health/hooks/ws 라우트 | **라우트 2개 추가**: `POST /api/driver/state`, `GET /api/driver/commands` + ws에 driverControl 주입 |
+| `server/src/clientMessageHandler.ts` | webviewReady·settings 등 | `setAgentModel` **케이스 추가**(agentId→sessionId), webviewReady에 `agentModels` 전송(보고 있을 때만→회귀 0) |
+
+> 식별자 매핑: 드라이버는 **session_id**로만 자신을 알리고, 서버가 store로 **agent_id ↔ session_id** 변환. webview는 agent_id 사용.
+
+**webview-ui (UI)**
+
+| 파일 | 원본 | 변경 |
+|------|------|------|
+| `webview-ui/src/i18n.ts` | (없음) | **신규**. ko/en 사전 + 순수 `t(key,lang)` + localStorage |
+| `components/SettingsModal.tsx` | 설정 항목(영어 고정) | **"Agent Models" 드롭다운**(F5) + 라벨 i18n + **"한국어" 토글**(F6) |
+| `hooks/useExtensionMessages.ts` | ServerMessage→상태 | `agentModels` **수신 처리**(availableModels/agentModels 상태)+반환 |
+| `App.tsx` | 합성 루트 | `lang` 상태 + SettingsModal에 F5/F6 props(`setAgentModel`/`onToggleLanguage`) |
+
+**driver (신규 폴더, 2차 추가/변경)**
+- 신규: `agentsFile.ts`(F1), `skills.ts`(F3), `i18n.ts`(F6), `agents.example.json`, `skills/example-김대리.md`
+- 변경: `config.ts`, `agent.ts`, `actions.ts`, `openrouter.ts`, `office.ts`, `index.ts`, scripts
+
+> 규칙 준수: asyncapi 드리프트 체크 통과, webview 픽셀 ESLint(색상/섀도/폰트) 0 위반, 기존 server/webview 테스트 회귀 0.
 
 ### 13-8. 2차 누적 테스트 (driver 98개)
 
