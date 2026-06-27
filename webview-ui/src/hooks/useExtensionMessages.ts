@@ -72,6 +72,10 @@ interface ExtensionMessageState {
   hooksEnabled: boolean;
   setHooksEnabled: (v: boolean) => void;
   hooksInfoShown: boolean;
+  /** F5: 선택 가능한 모델 목록(드라이버 보고). */
+  availableModels: string[];
+  /** F5: 에이전트별 현재 모델(id→model). */
+  agentModels: Record<number, string>;
 }
 
 function saveAgentSeats(os: OfficeState): void {
@@ -105,6 +109,8 @@ export function useExtensionMessages(
   const [externalAssetDirectories, setExternalAssetDirectories] = useState<string[]>([]);
   const [lastSeenVersion, setLastSeenVersion] = useState('');
   const [extensionVersion, setExtensionVersion] = useState('');
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [agentModels, setAgentModels] = useState<Record<number, string>>({});
   const [watchAllSessions, setWatchAllSessions] = useState(false);
   const [alwaysShowLabels, setAlwaysShowLabels] = useState(false);
   const [hooksEnabled, setHooksEnabled] = useState(true);
@@ -266,6 +272,15 @@ export function useExtensionMessages(
             }
           }
           return merged.sort((a, b) => a - b);
+        });
+      } else if (msg.type === 'agentModels') {
+        // F5: 드라이버가 보고한 에이전트별 현재 모델 + 선택 가능 목록.
+        const incoming = (msg.agents || []) as { id: number; model: string }[];
+        setAvailableModels((msg.availableModels || []) as string[]);
+        setAgentModels(() => {
+          const next: Record<number, string> = {};
+          for (const a of incoming) next[a.id] = a.model;
+          return next;
         });
       } else if (msg.type === 'agentToolStart') {
         const id = msg.id as number;
@@ -581,5 +596,7 @@ export function useExtensionMessages(
     hooksEnabled,
     setHooksEnabled,
     hooksInfoShown,
+    availableModels,
+    agentModels,
   };
 }

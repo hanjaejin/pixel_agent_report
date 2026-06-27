@@ -4,6 +4,7 @@ import {
   buildRequestBody,
   createOpenRouter,
   ACTIONS,
+  OpenRouterError,
 } from '../src/openrouter.ts';
 
 // openrouter.ts: OpenRouter(OpenAI 호환) 호출 + {action,target,reason} 파싱.
@@ -83,6 +84,13 @@ describe('createOpenRouter().decide - IO', () => {
 
     const or500 = createOpenRouter({ apiKey: 'K', fetchFn: fakeFetch('', 503) as unknown as typeof fetch });
     await expect(or500.decide('m', 's', 'u')).rejects.toThrow(/503/);
+  });
+
+  it('비정상 응답은 OpenRouterError(상태코드 포함)를 던진다', async () => {
+    const or = createOpenRouter({ apiKey: 'K', fetchFn: fakeFetch('', 404) as unknown as typeof fetch });
+    await expect(or.decide('m', 's', 'u')).rejects.toBeInstanceOf(OpenRouterError);
+    const err = await or.decide('m', 's', 'u').catch((e) => e);
+    expect(err.status).toBe(404);
   });
 
   it('모델이 깨진 내용을 줘도 rest 로 폴백한다(예외 아님)', async () => {

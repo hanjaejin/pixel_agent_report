@@ -14,6 +14,7 @@ import { ZoomControls } from './components/ZoomControls.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
 import { useEditorKeyboard } from './hooks/useEditorKeyboard.js';
 import { useExtensionMessages } from './hooks/useExtensionMessages.js';
+import { getStoredLanguage, type Lang,storeLanguage } from './i18n.js';
 import { OfficeCanvas } from './office/components/OfficeCanvas.js';
 import { ToolOverlay } from './office/components/ToolOverlay.js';
 import { EditorState } from './office/editor/editorState.js';
@@ -81,10 +82,13 @@ function App() {
     hooksEnabled,
     setHooksEnabled,
     hooksInfoShown,
+    availableModels,
+    agentModels,
   } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty);
 
   // Show migration notice once layout reset is detected
   const [migrationNoticeDismissed, setMigrationNoticeDismissed] = useState(false);
+  const [lang, setLang] = useState<Lang>(getStoredLanguage());
   const showMigrationNotice = layoutWasReset && !migrationNoticeDismissed;
 
   const [isChangelogOpen, setIsChangelogOpen] = useState(false);
@@ -374,6 +378,16 @@ function App() {
           const newVal = !hooksEnabled;
           setHooksEnabled(newVal);
           transport.send({ type: 'setHooksEnabled', enabled: newVal });
+        }}
+        agents={agents}
+        agentModels={agentModels}
+        availableModels={availableModels}
+        onSetAgentModel={(id, model) => transport.send({ type: 'setAgentModel', id, model })}
+        lang={lang}
+        onToggleLanguage={() => {
+          const next: Lang = lang === 'ko' ? 'en' : 'ko';
+          setLang(next);
+          storeLanguage(next);
         }}
       />
 

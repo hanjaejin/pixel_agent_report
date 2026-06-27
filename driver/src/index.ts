@@ -12,11 +12,12 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { loadDriverConfig, validateAgents } from './config.ts';
-import { createOffice } from './office.ts';
+import { loadDriverConfig, validateAgents, type AgentDefinition } from './config.ts';
+import { createOffice, type DriverCommand, type DriverStateReport } from './office.ts';
 import { createOpenRouter } from './openrouter.ts';
 import { createAgent } from './agent.ts';
 import { createSemaphore } from './semaphore.ts';
+import { loadSkill } from './skills.ts';
 import { createLogger } from './logger.ts';
 
 /** 오케스트레이션이 다루는 에이전트의 최소 표면(실제 Agent + 이름). */
@@ -24,6 +25,54 @@ export interface ManagedAgent {
   name: string;
   runLoop(opts?: { maxIterations?: number }): Promise<void>;
   stop(): Promise<void>;
+}
+
+/** 제어판(F5) 모델 선택을 적용하기 위한 에이전트 핸들(session_id 기준). */
+export interface ModelHandle {
+  sessionId: string;
+  getModel(): string;
+  setModel(model: string): void;
+}
+
+/** 제어 루프가 쓰는 office 의 최소 표면. */
+interface ControlOffice {
+  reportDriverState(state: DriverStateReport): Promise<void>;
+  pollCommands(): Promise<DriverCommand[]>;
+}
+
+/** 제어 루프 폴링 주기(ms). */
+const CONTROL_POLL_MS = 1500;
+
+/**
+ * 제어 루프 1회: ① 에이전트별 현재 모델 + 가용 목록을 서버에 보고
+ * ② 서버에 쌓인 모델 변경 명령을 가져와 해당 에이전트에 setModel.
+ * 입력: office(보고/폴링), handles(에이전트 핸들), availableModels(선택 가능 목록)
+ */
+export async function runControlTick(
+  office: ControlOffice,
+  handles: ModelHandle[],
+  availableModels: string[],
+): Promise<void> {
+  await office.reportDriverState({
+    availableModels,
+    agents: handles.map((h) => ({ sessionId: h.sessionId, model: h.getModel() })),
+  });
+  const commands = await office.pollCommands();
+  if (commands.length === 0) return;
+  const bySession = new Map(handles.map((h) => [h.sessionId, h]));
+  for (const c of commands) {
+    bySession.get(c.sessionId)?.setModel(c.model);
+  }
+}
+
+/** 설정된 에이전트들의 모델·폴백모델을 모아 선택 가능한 모델 목록을 만든다. */
+export function computeAvailableModels(agents: AgentDefinition[]): string[] {
+  const set = new Set<string>();
+  for (const a of agents) {
+    set.add(a.model);
+    for (const m of a.fallbackModels ?? []) set.add(m);
+  }
+  return [...set];
 }
 
 interface OrchestratorDeps {
@@ -79,11 +128,22 @@ async function main(): Promise<void> {
   // 전 에이전트가 공유하는 동시 호출 제한(비용/레이트리밋 보호).
   const semaphore = createSemaphore(cfg.maxConcurrency);
 
+  const handles: ModelHandle[] = [];
   const agents: ManagedAgent[] = cfg.agents.map((def) => {
     const openrouter = createOpenRouter({ apiKey: def.apiKey ?? cfg.apiKey });
     const logger = createLogger(def.name);
+    const skill = def.skillFile ? loadSkill(def.skillFile) : undefined;
     const agent = createAgent(
-      { name: def.name, model: def.model, workspace: cfg.workspace, sessionId: randomUUID() },
+      {
+        name: def.name,
+        model: def.model,
+        workspace: cfg.workspace,
+        sessionId: randomUUID(),
+        persona: def.persona,
+        skill,
+        fallbackModels: def.fallbackModels,
+        lang: cfg.lang,
+      },
       {
         office,
         openrouter,
@@ -94,8 +154,26 @@ async function main(): Promise<void> {
         semaphore,
       },
     );
+    handles.push({
+      sessionId: agent.sessionId,
+      getModel: () => agent.getModel(),
+      setModel: (m) => agent.setModel(m),
+    });
     return { name: def.name, runLoop: (o) => agent.runLoop(o), stop: () => agent.stop() };
   });
+
+  // 제어판(F5) 연동: 주기적으로 모델 상태 보고 + 변경 명령 폴링. PIXEL_PANEL=0 으로 끔.
+  const availableModels = computeAvailableModels(cfg.agents);
+  let controlTimer: ReturnType<typeof setInterval> | undefined;
+  if (process.env.PIXEL_PANEL !== '0') {
+    sys.info(`🎛️ 화면 모델 선택 연동 켜짐 (브라우저에서 에이전트 모델 변경 가능, 끄려면 PIXEL_PANEL=0)`);
+    controlTimer = setInterval(() => {
+      void runControlTick(office, handles, availableModels).catch(() => {
+        // 보고/폴링 실패는 다음 주기에 재시도(무시).
+      });
+    }, CONTROL_POLL_MS);
+    controlTimer.unref?.();
+  }
 
   // Ctrl+C / 종료 시 전원 graceful 퇴장.
   let stopping = false;
@@ -103,6 +181,7 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     sys.info('🛑 종료 신호 수신 — 전원 퇴근 처리 중...');
+    if (controlTimer) clearInterval(controlTimer);
     await stopAll(agents, { logger: sys });
     process.exit(0);
   };

@@ -153,4 +153,32 @@ describe('office - IO 함수 (의존성 주입)', () => {
     const rec = JSON.parse(appended[0].data.trim());
     expect(rec.subtype).toBe('init');
   });
+
+  // ── F5-4: 드라이버 상태 보고 / 명령 폴링 ──
+  it('reportDriverState 는 /api/driver/state 로 Bearer POST 한다', async () => {
+    const { deps, calls } = makeDeps();
+    const office = createOffice(deps);
+    await office.reportDriverState({ availableModels: ['m1'], agents: [{ sessionId: 's1', model: 'm1' }] });
+
+    const call = calls.find((c) => c.url.endsWith('/api/driver/state'))!;
+    expect(call).toBeTruthy();
+    expect(call.init.method).toBe('POST');
+    expect((call.init.headers as Record<string, string>)['Authorization']).toBe('Bearer TOK');
+    expect(JSON.parse(String(call.init.body))).toEqual({
+      availableModels: ['m1'],
+      agents: [{ sessionId: 's1', model: 'm1' }],
+    });
+  });
+
+  it('pollCommands 는 commands 배열을 반환한다', async () => {
+    const { deps } = makeDeps();
+    (deps.fetchFn as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ commands: [{ sessionId: 's1', model: 'mNew' }] }),
+    });
+    const office = createOffice(deps);
+    const cmds = await office.pollCommands();
+    expect(cmds).toEqual([{ sessionId: 's1', model: 'mNew' }]);
+  });
 });

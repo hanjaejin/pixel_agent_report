@@ -25,6 +25,7 @@ export type ServerMessage =
   | SubagentToolPermission
   | AgentTeamInfo
   | AgentTokenUsage
+  | AgentModels
   | LayoutLoaded
   | FurnitureAssetsLoaded
   | CharacterSpritesLoaded
@@ -49,6 +50,7 @@ export type ClientMessage =
   | SetHooksEnabled
   | SetHooksInfoShown
   | SetWatchAllSessions
+  | SetAgentModel
   | ExportLayout
   | ImportLayout
   | OpenSessionsFolder
@@ -175,6 +177,17 @@ export interface AgentTokenUsage {
   id: number;
   inputTokens: number;
   outputTokens: number;
+}
+
+export interface AgentModels {
+  type: 'agentModels';
+  agents: AgentModelEntry[];
+  availableModels: string[];
+}
+
+export interface AgentModelEntry {
+  id: number;
+  model: string;
 }
 
 export interface LayoutLoaded {
@@ -342,6 +355,12 @@ export interface SetHooksInfoShown {
 export interface SetWatchAllSessions {
   type: 'setWatchAllSessions';
   enabled: boolean;
+}
+
+export interface SetAgentModel {
+  type: 'setAgentModel';
+  id: number;
+  model: string;
 }
 
 export interface ExportLayout {

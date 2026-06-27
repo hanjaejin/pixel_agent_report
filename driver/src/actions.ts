@@ -7,42 +7,64 @@
  *       한국어 문구는 모델이 아니라 이 모듈의 고정 템플릿이 만든다(작은 모델 안정성).
  * 의존성: openrouter.ts 의 Action 타입만 참조(런타임 의존 없음).
  */
+import type { Lang } from './i18n.ts';
 import type { Action } from './openrouter.ts';
 
 /** 서버가 아는(= 애니메이션이 매핑된) tool_name 집합. */
 export const KNOWN_TOOL_NAMES = ['Read', 'Edit', 'Bash'] as const;
 export type KnownToolName = (typeof KNOWN_TOOL_NAMES)[number];
 
-/** action 별 메타데이터: 도구 이름, 이모지, 문구 빌더. */
+/** action 별 메타데이터: 도구 이름, 이모지, 언어별 문구 빌더. */
 interface ActionMeta {
   /** 서버 훅 tool_name. rest 는 도구 없음(null → Stop 으로 처리). */
   tool: KnownToolName | null;
   /** 로그 이모지. */
   emoji: string;
-  /** target(대상)을 받아 한국어 문구를 만든다. */
-  phrase: (target: string) => string;
+  /** target(대상) + 언어를 받아 업무 문구를 만든다(ko/en, F6). */
+  phrase: (target: string, lang: Lang) => string;
 }
 
 const ACTION_META: Record<Action, ActionMeta> = {
   read: {
     tool: 'Read',
     emoji: '📖',
-    phrase: (t) => (t ? `📖 ${t} 파일을 살펴보고 있어요` : '📖 코드를 살펴보고 있어요'),
+    phrase: (t, lang) =>
+      lang === 'en'
+        ? t
+          ? `📖 Looking at ${t}`
+          : '📖 Looking at the code'
+        : t
+          ? `📖 ${t} 파일을 살펴보고 있어요`
+          : '📖 코드를 살펴보고 있어요',
   },
   write: {
     tool: 'Edit',
     emoji: '✏️',
-    phrase: (t) => (t ? `✏️ ${t} 를 수정하는 중이에요` : '✏️ 코드를 수정하는 중이에요'),
+    phrase: (t, lang) =>
+      lang === 'en'
+        ? t
+          ? `✏️ Editing ${t}`
+          : '✏️ Writing code'
+        : t
+          ? `✏️ ${t} 를 수정하는 중이에요`
+          : '✏️ 코드를 수정하는 중이에요',
   },
   run: {
     tool: 'Bash',
     emoji: '⚙️',
-    phrase: (t) => (t ? `⚙️ ${t} 명령을 실행하고 있어요` : '⚙️ 명령을 실행하고 있어요'),
+    phrase: (t, lang) =>
+      lang === 'en'
+        ? t
+          ? `⚙️ Running: ${t}`
+          : '⚙️ Running a command'
+        : t
+          ? `⚙️ ${t} 명령을 실행하고 있어요`
+          : '⚙️ 명령을 실행하고 있어요',
   },
   rest: {
     tool: null,
     emoji: '☕',
-    phrase: () => '☕ 잠깐 쉬는 중이에요',
+    phrase: (_t, lang) => (lang === 'en' ? '☕ Taking a short break' : '☕ 잠깐 쉬는 중이에요'),
   },
 };
 
@@ -71,11 +93,11 @@ export function toolInputFor(action: Action, target: string): Record<string, unk
 }
 
 /**
- * action + target → 한국어 로그 문구(이모지 포함, 이름 접두사 제외).
- * 입력: action, target
- * 출력: 예) '📖 config.ts 파일을 살펴보고 있어요'. target 이 비면 일반 문구로 폴백.
+ * action + target + lang → 로그 문구(이모지 포함, 이름 접두사 제외).
+ * 입력: action, target, lang(기본 'ko', F6)
+ * 출력: 예) ko '📖 config.ts 파일을 살펴보고 있어요', en '📖 Looking at config.ts'.
  * 의존성: 로거가 `[이름]` 접두사를 붙이므로 여기서는 본문만 만든다.
  */
-export function describeAction(action: Action, target: string): string {
-  return ACTION_META[action].phrase(target);
+export function describeAction(action: Action, target: string, lang: Lang = 'ko'): string {
+  return ACTION_META[action].phrase(target, lang);
 }

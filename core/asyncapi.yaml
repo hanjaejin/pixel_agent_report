@@ -99,6 +99,8 @@ components:
         # Agent Teams
         - $ref: '#/components/schemas/AgentTeamInfo'
         - $ref: '#/components/schemas/AgentTokenUsage'
+        # Agent model selection (driver-reported)
+        - $ref: '#/components/schemas/AgentModels'
         # Layout
         - $ref: '#/components/schemas/LayoutLoaded'
         # Assets
@@ -129,6 +131,7 @@ components:
         - $ref: '#/components/schemas/SetHooksEnabled'
         - $ref: '#/components/schemas/SetHooksInfoShown'
         - $ref: '#/components/schemas/SetWatchAllSessions'
+        - $ref: '#/components/schemas/SetAgentModel'
         - $ref: '#/components/schemas/ExportLayout'
         - $ref: '#/components/schemas/ImportLayout'
         - $ref: '#/components/schemas/OpenSessionsFolder'
@@ -413,6 +416,36 @@ components:
           type: integer
         outputTokens:
           type: integer
+
+    AgentModelEntry:
+      description: One agent's id and its current model.
+      type: object
+      additionalProperties: false
+      required: [id, model]
+      properties:
+        id:
+          type: integer
+        model:
+          type: string
+
+    AgentModels:
+      description: |
+        Per-agent current model plus the list of selectable models. Reported by the
+        driver (via the server) so the webview can render a model picker per agent.
+      type: object
+      additionalProperties: false
+      required: [type, agents, availableModels]
+      properties:
+        type:
+          const: agentModels
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentModelEntry'
+        availableModels:
+          type: array
+          items:
+            type: string
 
     LayoutLoaded:
       description: |
@@ -786,6 +819,19 @@ components:
           const: setWatchAllSessions
         enabled:
           type: boolean
+
+    SetAgentModel:
+      description: Request to change a specific agent's model (relayed to the driver).
+      type: object
+      additionalProperties: false
+      required: [type, id, model]
+      properties:
+        type:
+          const: setAgentModel
+        id:
+          type: integer
+        model:
+          type: string
 
     ExportLayout:
       description: Trigger layout export via host-native save dialog.

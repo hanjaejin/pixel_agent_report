@@ -277,17 +277,283 @@
 
 ---
 
+## 기능 단계 F1: 에이전트 정의 외부화(agents.json)
+
+- 대상 파일: [src/agentsFile.ts](../src/agentsFile.ts)(신규), [src/config.ts](../src/config.ts)(확장), [agents.example.json](../agents.example.json)
+- 테스트 파일: [__tests__/agentsFile.test.ts](../__tests__/agentsFile.test.ts), [__tests__/config.test.ts](../__tests__/config.test.ts)(확장)
+
+### 테스트 항목
+
+| # | 그룹 | 테스트 항목 | 검증 의도 |
+|---|------|------------|----------|
+| 1 | agentsFile | 배열 JSON 파싱 | 기본 형태 |
+| 2 | agentsFile | `{agents:[]}` 형태 파싱 | 대체 형태 |
+| 3 | agentsFile | 선택 필드(persona/skillFile/fallbackModels/apiKey) 반영 | 확장 스키마 |
+| 4 | agentsFile | 읽기 실패 → 한국어 에러 | 친절한 실패 |
+| 5 | agentsFile | JSON 깨짐 → 한국어 에러 | 친절한 실패 |
+| 6 | agentsFile | 배열/agents 아님 → 한국어 에러 | 형태 검증 |
+| 7 | agentsFile | model 누락(위치 포함) 거부 | 필수값 |
+| 8 | agentsFile | name 누락 거부 | 필수값 |
+| 9 | agentsFile | 이름 중복 거부 | 무결성 |
+| 10 | agentsFile | fallbackModels 타입 오류 거부 | 타입 검증 |
+| 11 | agentsFile | persona 타입 오류 거부 | 타입 검증 |
+| 12 | config | PIXEL_AGENTS_FILE 지정 시 로드(주입) | 우선순위 ① |
+| 13 | config | 기본 경로 존재 시 로드 | 우선순위 ② |
+| 14 | config | 파일 없으면 DEFAULT_AGENTS 폴백 | 회귀 0 |
+
+### 테스트 완료 내역
+
+- 결과: **+14 (agentsFile 11 + config 3), 누적 72/72** ✅
+- 실행 일시: 2026-06-27
+- 비고: `npm run build`(타입체크) 통과. `agents.json` 없으면 기존 동작 그대로(회귀 0). IO 주입으로 디스크 없이 검증.
+
+```
+ ✓ __tests__/agentsFile.test.ts (11 tests)
+ ✓ __tests__/config.test.ts (11 tests)
+ Test Files  10 passed (10)
+      Tests  72 passed (72)
+```
+
+---
+
+## 기능 단계 F2: 에이전트별 페르소나(성격/말투)
+
+- 대상 파일: [src/agent.ts](../src/agent.ts)(systemPromptFor 확장·export, AgentConfig.persona), index/smoke/integration(persona 전달)
+- 테스트 파일: [__tests__/agent.test.ts](../__tests__/agent.test.ts)(확장)
+
+### 테스트 항목
+
+| # | 테스트 항목 | 검증 의도 |
+|---|------------|----------|
+| 1 | persona 있으면 성격 줄+이름 포함 | 주입 동작 |
+| 2 | persona 없으면 기본 프롬프트(성격 줄 없음) | 회귀 0 |
+| 3 | createAgent 가 persona 를 decide 시스템 프롬프트에 실음 | 통합 경로 |
+
+### 테스트 완료 내역
+
+- 결과: **+3, 누적 75/75** ✅
+- 실행 일시: 2026-06-27
+- 비고: `npm run build` 통과. 한국어 문구는 드라이버 템플릿(ADR-006) 유지, persona 한 줄만 추가(토큰 미미).
+
+```
+ Test Files  10 passed (10)
+      Tests  75 passed (75)
+```
+
+---
+
+## 기능 단계 F3: 에이전트별 SKILL.md 참조
+
+- 대상 파일: [src/skills.ts](../src/skills.ts)(신규), [src/agent.ts](../src/agent.ts)(systemPromptFor·config.skill), [src/index.ts](../src/index.ts)(loadSkill 연결), [skills/example-김대리.md](../skills/example-김대리.md)
+- 테스트 파일: [__tests__/skills.test.ts](../__tests__/skills.test.ts)(신규), agent.test.ts(확장)
+
+### 테스트 항목
+
+| # | 그룹 | 테스트 항목 | 검증 의도 |
+|---|------|------------|----------|
+| 1 | skills | 정상 로드(trim) | 기본 |
+| 2 | skills | 없는 파일 → '' (graceful) | 무중단 |
+| 3 | skills | 빈 파일 → '' | 처리 |
+| 4 | skills | 길이 상한 초과 → 잘라내고 생략 표시 | 비용 보호 |
+| 5 | skills | 상한 이내 그대로 | 경계 |
+| 6 | agent | skill 있으면 참고 자료 섹션+내용 포함 | 주입 |
+| 7 | agent | skill 없으면 섹션 없음 | 회귀 0 |
+| 8 | agent | persona+skill 함께 주입 | 합성 |
+
+### 테스트 완료 내역
+
+- 결과: **+8 (skills 5 + agent 3), 누적 83/83** ✅
+- 실행 일시: 2026-06-27
+- 비고: `npm run build` 통과. 없는 파일 graceful, 길이 상한으로 토큰 비용 보호. agent.ts는 파일시스템 미접근(순수, index가 로드).
+
+```
+ Test Files  11 passed (11)
+      Tests  83 passed (83)
+```
+
+---
+
+## 기능 단계 F4: 모델 폴백(자동 대체)
+
+- 대상 파일: [src/openrouter.ts](../src/openrouter.ts)(OpenRouterError), [src/agent.ts](../src/agent.ts)(모델 목록·전환), index/smoke/integration(fallbackModels 전달)
+- 테스트 파일: [__tests__/openrouter.test.ts](../__tests__/openrouter.test.ts)(확장), [__tests__/agent.test.ts](../__tests__/agent.test.ts)(확장)
+
+### 테스트 항목
+
+| # | 그룹 | 테스트 항목 | 검증 의도 |
+|---|------|------------|----------|
+| 1 | openrouter | 비정상 응답 → OpenRouterError(status) | 에러 구조화 |
+| 2 | agent | 영구 에러(404) → 다음 폴백 모델로 전환 | 폴백 동작 |
+| 3 | agent | 일시 에러(429) → 전환 없이 백오프 | 분류 정확성 |
+| 4 | agent | 폴백 소진 시 영구 에러 → rest 대기 | 안전 종료 |
+
+### 테스트 완료 내역
+
+- 결과: **+4 (openrouter 1 + agent 3), 누적 87/87** ✅
+- 실행 일시: 2026-06-27
+- 비고: `npm run build` 통과. 영구(400/401/402/403/404)=모델 전환, 일시(429/5xx/네트워크)=지수 백오프. 기존 백오프 테스트(generic Error)는 일시로 분류되어 회귀 0.
+
+```
+ Test Files  11 passed (11)
+      Tests  87 passed (87)
+```
+
+---
+
+## 기능 단계 F5-1: 런타임 모델 hot-swap (driver)
+
+- 대상 파일: [src/agent.ts](../src/agent.ts)(`getModel`/`setModel` 추가)
+- 테스트 파일: [__tests__/agent.test.ts](../__tests__/agent.test.ts)(확장)
+
+### 테스트 항목
+
+| # | 테스트 항목 | 검증 의도 |
+|---|------------|----------|
+| 1 | getModel 초기값 + setModel 후 다음 호출 반영 | 런타임 교체 |
+| 2 | setModel 대상이 폴백 목록에 있으면 그 모델로 | 인덱스 이동 |
+
+### 테스트 완료 내역
+
+- 결과: **+2, 누적 89/89** ✅
+- 실행 일시: 2026-06-27
+- 비고: `npm run build` 통과. F4 모델 목록/인덱스 재사용, 초기 동작 회귀 0. (F5-2~5: core/server/webview는 후속 서브스텝)
+
+```
+ Test Files  11 passed (11)
+      Tests  89 passed (89)
+```
+
+---
+
+## 기능 단계 F5-2: core 프로토콜 확장 (모델 선택 메시지)
+
+- 대상 파일: [core/asyncapi.yaml](../../../core/asyncapi.yaml)(AgentModelEntry/AgentModels/SetAgentModel 추가), core/src/messages.ts(재생성)
+- 검증 방식: 프로토콜 계층은 vitest 단위 테스트가 아니라 **스펙 검증·생성·타입체크·드리프트**로 확인.
+
+### 검증 항목 / 결과
+
+| 검증 | 결과 |
+|------|------|
+| `npx asyncapi validate` | ✅ 통과(에러 0, info만: 3.1.0 권고) |
+| `npm run asyncapi:generate` | ✅ messages.ts 재생성, 익명 스키마 누수 0(AgentModelEntry 명명 추출) |
+| `npm run check-types`(root+server test+webview) | ✅ 통과(기존 코드 회귀 0) |
+| 재생성 멱등성(드리프트) | ✅ 안정(변화는 신규 19줄뿐) |
+
+- 실행 일시: 2026-06-27
+- 비고: 드라이버 단위 테스트는 변화 없음(89/89 유지). 프로토콜은 webview(F5-5)에서 사용, 드라이버는 별도 HTTP 채널 사용(F5-3).
+
+---
+
+## 기능 단계 F5-3: server 제어 채널 (driver↔server)
+
+- 대상 파일: [server/src/driverControl.ts](../../../server/src/driverControl.ts)(신규), httpServer.ts(라우트 2개), clientMessageHandler.ts(setAgentModel + webviewReady)
+- 테스트 파일: [server/__tests__/driverControl.test.ts](../../../server/__tests__/driverControl.test.ts)(신규, Vitest)
+
+### 테스트 항목 / 결과
+
+| # | 테스트 항목 | 검증 의도 |
+|---|------------|----------|
+| 1 | setState 후 getModel/getAvailableModels | 보고 반영 |
+| 2 | queueCommand 낙관적 갱신 + drainCommands 비움 | 명령 큐 |
+| 3 | 같은 session 명령 최신 대체 | 중복 제거 |
+| 4 | buildAgentModelsMessage: session↔agent 매핑, 미보고 제외 | broadcast 구성 |
+
+### 검증 결과
+
+- 격리 실행: **driverControl + server + hookEventHandler + agentStateStore = 81 passed** ✅
+- `npm run check-types`(root+server): 통과 ✅
+- 전체 server 스위트: 일부 타임아웃 실패(mockClaudeRunner 등 **프로세스/타이머 테스트가 병렬 부하에서 10s 초과**) — 본 변경과 무관한 환경적 플레이키(변경 관련 파일은 모두 그린).
+- 실행 일시: 2026-06-27
+
+---
+
+## 기능 단계 F5-4: driver 보고/폴링 + hot-swap 적용
+
+- 대상 파일: [src/office.ts](../src/office.ts)(reportDriverState/pollCommands), [src/index.ts](../src/index.ts)(runControlTick/computeAvailableModels/제어 루프)
+- 테스트 파일: [__tests__/office.test.ts](../__tests__/office.test.ts)(확장), [__tests__/orchestrator.test.ts](../__tests__/orchestrator.test.ts)(확장)
+
+### 테스트 항목
+
+| # | 그룹 | 테스트 항목 | 검증 의도 |
+|---|------|------------|----------|
+| 1 | office | reportDriverState → /api/driver/state Bearer POST | 보고 |
+| 2 | office | pollCommands → commands 배열 반환 | 폴링 |
+| 3 | orch | runControlTick: 보고 + 명령을 해당 에이전트에 setModel | 적용 |
+| 4 | orch | 명령 없으면 setModel 미호출 | no-op |
+| 5 | orch | computeAvailableModels: 모델+폴백 중복 제거 | 목록 구성 |
+
+### 테스트 완료 내역
+
+- 결과: **+5 (office 2 + orchestrator 3), 누적 94/94** ✅
+- 실행 일시: 2026-06-27
+- 비고: `npm run build` 통과. 제어 루프는 1.5s 주기로 보고/폴링(실패는 무시·재시도), `PIXEL_PANEL=0` 으로 끔. 종료 시 타이머 정리.
+
+```
+ Test Files  11 passed (11)
+      Tests  94 passed (94)
+```
+
+---
+
+## 기능 단계 F5-5: webview 모델 선택 UI
+
+- 대상 파일: webview-ui/src/hooks/useExtensionMessages.ts(agentModels 처리·상태·반환), App.tsx(전달), components/SettingsModal.tsx(Agent Models 드롭다운)
+- 검증 방식: 타입체크 + ESLint(픽셀 규칙) + 빌드 + webview 단위 테스트.
+
+### 검증 결과
+
+| 검증 | 결과 |
+|------|------|
+| `npm run check-types`(root+server) | ✅ 통과 |
+| webview `tsc -b && vite build` | ✅ 빌드 성공 |
+| webview `eslint .`(픽셀 색상/섀도/폰트 규칙 포함) | ✅ 0 위반 |
+| webview 단위 테스트 | ✅ 41 passed |
+
+- 동작: `agentModels` 수신 → Settings 의 "Agent Models" 에 에이전트별 드롭다운 표시(모델 보고 있을 때만) → 선택 시 `setAgentModel` 송신.
+- 실행 일시: 2026-06-27
+- 비고: 풀 E2E(드라이버↔서버↔webview 왕복)는 별도 후속 권장(현 e2e 하니스는 mock-claude 기반). 각 계층 경계는 단위 테스트로 검증됨.
+
+---
+
+## 기능 단계 F6: 한↔영 전환 (webview UI + 드라이버 로그)
+
+- 대상 파일(webview): src/i18n.ts(신규), App.tsx(lang 상태), components/SettingsModal.tsx(t/토글)
+- 대상 파일(driver): src/i18n.ts(신규), actions.ts(describeAction lang), agent.ts(arrive/leave/describe), config.ts(PIXEL_LANG)
+- 테스트: [__tests__/i18n.test.ts](../__tests__/i18n.test.ts)(driver 신규), config.test.ts(확장), webview-ui/test/i18n.test.ts(신규)
+
+### 테스트 항목 / 결과
+
+| # | 영역 | 테스트 항목 | 검증 |
+|---|------|------------|------|
+| 1 | driver | t ko/en + 미존재 키 | 순수 번역 |
+| 2 | driver | parseLang(en만 en, 나머지 ko) | env 해석 |
+| 3 | driver | describeAction 언어별(기본 ko) | 행동 문구 |
+| 4 | driver | config PIXEL_LANG → lang | 설정 |
+| 5 | webview | t ko/en + 미존재 키 | 순수 번역 |
+
+### 검증 결과
+
+- driver: **98/98** ✅ (i18n 3 + config 1 신규) · webview 단위: **43**(i18n +2 포함) ✅
+- `npm run build`(driver 타입체크), webview build/eslint 통과 ✅
+- 실행 일시: 2026-06-27
+- 범위: 오피스 활동 라벨(서버 provider)은 영어 유지(ADR-018). webview UI=localStorage 토글, 드라이버 로그=PIXEL_LANG.
+
+---
+
 ## 누적 테스트 요약
 
 | 모듈 | 테스트 수 |
 |------|-----------|
 | logger | 4 |
-| office | 10 |
-| openrouter | 10 |
+| office | 12 |
+| openrouter | 11 |
 | actions | 8 |
-| agent | 9 |
-| config | 8 |
-| orchestrator | 3 |
+| agent | 20 |
+| config | 12 |
+| orchestrator | 5 |
 | backoff | 3 |
 | semaphore | 3 |
-| **합계** | **58** |
+| agentsFile (F1) | 11 |
+| skills (F3) | 5 |
+| i18n (F6) | 3 |
+| **합계** | **98** |

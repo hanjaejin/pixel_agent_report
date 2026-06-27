@@ -80,10 +80,51 @@ npm run start:env
 |------|------|------|
 | `OPENROUTER_API_KEY` | (없음) | 진짜 AI로 돌릴 때 필요. 체험 모드(smoke)는 불필요 |
 | `PIXEL_WORKSPACE` | 실행 폴더 | 캐릭터를 띄울 기준 경로. 서버와 다르면 Watch All Sessions 를 켜세요 |
+| `PIXEL_AGENTS_FILE` | `agents.json` | 에이전트 정의 파일 경로(F1). 없으면 cwd/agents.json, 그것도 없으면 코드 기본값 |
+| `PIXEL_LANG` | `ko` | 드라이버 로그/업무 문구 언어(F6). 영어는 `en` |
+| `PIXEL_PANEL` | (켜짐) | 화면에서 모델 선택 연동(F5). 끄려면 `0` |
 | `PIXEL_LOOP_INTERVAL_MS` | 4000 | 행동 1번 사이 쉬는 시간(최소 1000). 키우면 비용↓ |
 | `PIXEL_MAX_CONCURRENCY` | 2 | AI 동시 호출 최대 개수(비용/429 보호) |
 | `PIXEL_BACKOFF_BASE_MS` | 2000 | 호출 실패 시 첫 대기. 실패할수록 2배씩 늘어남 |
 | `PIXEL_BACKOFF_MAX_MS` | 30000 | 대기 상한 |
+
+---
+
+## ✨ 신규 기능 (F1~F6)
+
+1차 PoC(F1 이전) 위에 추가된 기능들입니다. 자세한 설계는 `docs/PLAN_2.md`, `docs/adr/ADR-013~020`, `docs/reports/STAGE-F*` 참고.
+
+### F1 — 에이전트 정의 외부화 (`agents.json`)
+코드를 고치지 않고 에이전트를 추가/수정합니다. `copy agents.example.json agents.json` 후 편집.
+잘못된 설정(이름 중복·model 누락·타입 오류)은 **위치를 포함한 친절한 한국어 에러**로 즉시 알려줍니다.
+```jsonc
+[
+  { "name": "김대리", "model": "meta-llama/llama-3.2-3b-instruct",
+    "persona": "꼼꼼한 성격",                         // F2
+    "skillFile": "skills/example-김대리.md",          // F3
+    "fallbackModels": ["qwen/qwen-2.5-7b-instruct"] } // F4
+]
+```
+
+### F2 — 페르소나(성격/말투)
+`persona` 를 적으면 시스템 프롬프트에 성격이 주입되어 행동·이유(reason)에 반영됩니다.
+
+### F3 — SKILL.md 참조
+`skillFile` 경로의 마크다운(역할·규칙)을 참고 자료로 주입합니다. 길이 상한(기본 4000자)으로 토큰 비용을 보호하고, 파일이 없어도 안전하게 동작합니다.
+
+### F4 — 모델 폴백(자동 대체)
+영구 에러(404/402/401)면 `fallbackModels` 로 **자동 전환**해 멈추지 않습니다. 일시 에러(429/5xx)는 기존 지수 백오프로 재시도합니다.
+
+### F5 — 화면에서 모델 선택
+브라우저 **설정(⚙️) → "Agent Models"** 드롭다운에서 에이전트별 모델을 바꾸면 **다음 행동부터 즉시 적용**됩니다.
+드라이버가 1.5초 주기로 모델 상태를 서버에 보고하고(`POST /api/driver/state`), 변경 명령을 폴링(`GET /api/driver/commands`)합니다. 끄려면 `PIXEL_PANEL=0`.
+
+### F6 — 한↔영 전환
+- **화면 UI**: 설정 → **"한국어"** 토글로 Settings 텍스트를 ko/en 전환(localStorage 유지).
+- **드라이버 로그**: `PIXEL_LANG=en` 으로 업무 로그를 영어로(`📖 Looking at config.ts`).
+- (참고: 오피스 캔버스의 활동 라벨 "Reading…"은 서버 공유 부분이라 영어 유지.)
+
+> 단계별 리얼테스트 방법은 👉 **[docs/리얼테스트_가이드.md](docs/리얼테스트_가이드.md)**
 
 ---
 
@@ -94,7 +135,7 @@ npm run start:env
 | `npm run smoke` | 키 없이 체험(가짜 AI가 정해진 행동 반복) |
 | `npm start` / `npm run start:env` | 진짜 OpenRouter로 구동(.env 키 사용) |
 | `npm run check:integration` | 서버 연결 자동 점검(훅 200/채택 확인 후 종료) |
-| `npm test` | 단위 테스트 전체 |
+| `npm test` | 단위 테스트 전체(98개) |
 | `npm run build` | 타입 체크 |
 
 ---
@@ -108,6 +149,9 @@ npm run start:env
 | 캐릭터가 잠깐 보였다 사라짐 | 워크스페이스 불일치로 채택 안 됨 | 오피스 설정에서 **Watch All Sessions** 켜기 |
 | `OPENROUTER_API_KEY 환경변수가 필요합니다` | 키 없이 `start` 실행 | 체험은 `npm run smoke`, 진짜는 `.env`에 키 넣고 `start:env` |
 | `npx pixel-agents` 가 안 됨 | npm 배포본엔 CLI가 없음(구버전) | 이 저장소를 빌드해 `node dist/cli.js` 사용 |
+| 바닥/가구 없이 **분홍(마젠타)** 화면 | 저장된 `layout.json` 손상 | `~/.pixel-agents/layout.json` 삭제 후 새로고침(기본 레이아웃 복구) |
+| 설정에 **Agent Models** 가 안 보임 | 드라이버 미실행/새로고침함 | 드라이버 실행 중인지, 새로고침 안 했는지 확인(F5는 연결 후 보고) |
+| 화면 라벨이 전부 `driver` | 에이전트 이름은 **터미널 로그**에만 표시(현 사양) | 이름은 창 B 로그에서 확인(오피스 표시는 향후 기능) |
 
 더 자세한 안내는 👉 **[docs/사용설명서.md](docs/사용설명서.md)**
 
@@ -130,7 +174,7 @@ driver/
   scripts/
     smoke.ts             체험 모드(무한)
     integration-check.ts 자동 점검(종료형)
-  __tests__/        단위 테스트(58개)
+  __tests__/        단위 테스트(98개)
   docs/
     사용설명서.md      ← 초보자용 상세 매뉴얼
     PLAN 관련/ADR/리포트
@@ -156,6 +200,14 @@ driver/
 | 010 | 에이전트 격리 |
 | 011 | 비용·레이트리밋 정책 |
 | 012 | 공개 범위·비밀 관리 |
+| 013 | 에이전트 정의 외부화(agents.json) — F1 |
+| 014 | 페르소나 주입 — F2 |
+| 015 | SKILL.md 컨텍스트 주입(길이 상한) — F3 |
+| 016 | 에러 분류와 모델 폴백 — F4 |
+| 017 | 모델 런타임 hot-swap — F5 |
+| 018 | i18n 한↔영(웹뷰 UI + 드라이버 로그) — F6 |
+| 019 | server↔driver 제어 채널(보고+명령 폴링) — F5 |
+| 020 | AsyncAPI 프로토콜 확장 절차 — F5 |
 
 ---
 

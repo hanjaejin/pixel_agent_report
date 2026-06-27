@@ -2,3 +2,6 @@ node_modules/
 dist/
 .env
 *.log
+
+# 사용자별 에이전트 설정(템플릿은 agents.example.json). 개인 설정/테스트 편집 커밋 방지.
+agents.json

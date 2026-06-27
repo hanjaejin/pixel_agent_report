@@ -67,4 +67,43 @@ describe('config', () => {
     const cfg = loadDriverConfig({ OPENROUTER_API_KEY: 'k', PIXEL_WORKSPACE: '/ws', PIXEL_LOOP_INTERVAL_MS: '100' });
     expect(cfg.loopIntervalMs).toBe(1000);
   });
+
+  // ── F1: agents.json 외부화 ──
+  it('PIXEL_AGENTS_FILE 가 지정되면 그 파일을 로드한다(주입)', () => {
+    const fileAgents = [{ name: '외부김', model: 'mx' }];
+    const cfg = loadDriverConfig(
+      { OPENROUTER_API_KEY: 'k', PIXEL_WORKSPACE: '/ws', PIXEL_AGENTS_FILE: '/some/agents.json' },
+      undefined,
+      { loadAgentsFile: () => fileAgents },
+    );
+    expect(cfg.agents).toEqual(fileAgents);
+  });
+
+  it('미지정이라도 기본 경로에 agents.json 이 있으면 로드한다', () => {
+    const fileAgents = [{ name: '기본경로', model: 'm' }];
+    const cfg = loadDriverConfig(
+      { OPENROUTER_API_KEY: 'k', PIXEL_WORKSPACE: '/ws' },
+      undefined,
+      { fileExists: () => true, loadAgentsFile: () => fileAgents },
+    );
+    expect(cfg.agents).toEqual(fileAgents);
+  });
+
+  it('파일이 없으면 DEFAULT_AGENTS 로 폴백한다(기존 동작 보존)', () => {
+    const cfg = loadDriverConfig(
+      { OPENROUTER_API_KEY: 'k', PIXEL_WORKSPACE: '/ws' },
+      undefined,
+      { fileExists: () => false },
+    );
+    expect(cfg.agents).toHaveLength(3);
+  });
+});
+
+describe('config - 언어(F6)', () => {
+  it('PIXEL_LANG=en 이면 en, 미설정이면 ko', () => {
+    const en = loadDriverConfig({ OPENROUTER_API_KEY: 'k', PIXEL_WORKSPACE: '/ws', PIXEL_LANG: 'en' });
+    expect(en.lang).toBe('en');
+    const def = loadDriverConfig({ OPENROUTER_API_KEY: 'k', PIXEL_WORKSPACE: '/ws' });
+    expect(def.lang).toBe('ko');
+  });
 });

@@ -58,7 +58,14 @@ async function main(): Promise<void> {
 
   const agents: ManagedAgent[] = DEFAULT_AGENTS.map((def) => {
     const agent = createAgent(
-      { name: def.name, model: def.model, workspace, sessionId: randomUUID() },
+      {
+        name: def.name,
+        model: def.model,
+        workspace,
+        sessionId: randomUUID(),
+        persona: def.persona,
+        fallbackModels: def.fallbackModels,
+      },
       { office, openrouter: fakeOpenRouter(), logger: createLogger(def.name), loopIntervalMs: 300, actionDurationMs: 600 },
     );
     return { name: def.name, runLoop: (o) => agent.runLoop(o), stop: () => agent.stop() };

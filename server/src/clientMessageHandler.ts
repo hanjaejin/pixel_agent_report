@@ -2,6 +2,7 @@ import type { AgentRuntime } from './agentRuntime.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import type { LoadedAssets, LoadedCharacterSprites, LoadedPetSprites } from './assetLoader.js';
 import { readConfig, writeConfig } from './configPersistence.js';
+import { buildAgentModelsMessage, type DriverControlState } from './driverControl.js';
 import { readLayoutFromFile, writeLayoutToFile } from './layoutPersistence.js';
 import { claudeProvider } from './providers/index.js';
 
@@ -26,6 +27,8 @@ export interface ClientMessageContext {
   cache: AssetCache | null;
   /** Install/uninstall hooks side effect. Needs server url+token known only to cli.ts. */
   onSetHooksEnabled?: SetHooksEnabledSideEffect;
+  /** Driver model-selection control state (F5). Absent in tests / when no driver. */
+  driverControl?: DriverControlState;
 }
 
 // ── Setting key constants (mirror adapters/vscode/constants.ts) ──
@@ -100,6 +103,18 @@ export function handleClientMessage(
     case 'setHooksInfoShown':
       adapter?.setSetting(KEY_HOOKS_INFO_SHOWN, true);
       break;
+
+    case 'setAgentModel': {
+      // webview 가 agent_id 로 보낸 모델 변경 → session_id 로 변환해 드라이버 명령 큐에 적재.
+      const id = msg.id as number;
+      const model = msg.model as string;
+      const agent = store.get(id);
+      if (ctx.driverControl && agent && typeof model === 'string' && model) {
+        ctx.driverControl.queueCommand(agent.sessionId, model);
+        store.broadcast(buildAgentModelsMessage(store, ctx.driverControl));
+      }
+      break;
+    }
 
     case 'addExternalAssetDirectory': {
       const newPath = msg.path as string | undefined;
@@ -219,4 +234,12 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
     folderNames,
     externalAgents,
   });
+
+  // 7. Driver-reported model selection (F5). 보고된 게 있을 때만 보내 기존 연결 시퀀스를 보존.
+  if (ctx.driverControl) {
+    const modelsMsg = buildAgentModelsMessage(store, ctx.driverControl);
+    if (modelsMsg.agents.length > 0 || modelsMsg.availableModels.length > 0) {
+      send(modelsMsg);
+    }
+  }
 }

@@ -131,11 +131,27 @@ export interface OfficeDeps {
 /** 훅 POST 타임아웃(ms) — ADR-001 계약. */
 const HOOK_TIMEOUT_MS = 2000;
 
+/** 드라이버가 서버에 보고하는 모델 상태(F5-4). */
+export interface DriverStateReport {
+  availableModels: string[];
+  agents: { sessionId: string; model: string }[];
+}
+
+/** 서버가 내려주는 모델 변경 명령(webview 선택, F5-4). */
+export interface DriverCommand {
+  sessionId: string;
+  model: string;
+}
+
 export interface Office {
   /** 훅 페이로드 1건을 서버로 POST 한다. 실패 시 한국어 에러를 던진다. */
   postHook(payload: HookPayload): Promise<void>;
   /** init 트랜스크립트 파일을 만들고 경로를 반환한다(스캐너 채택용). */
   writeInitTranscript(workspacePath: string, sessionId: string): string;
+  /** 에이전트별 현재 모델 + 선택 가능 목록을 서버에 보고한다(webview 표시용, F5). */
+  reportDriverState(state: DriverStateReport): Promise<void>;
+  /** 서버에 쌓인 모델 변경 명령을 가져온다(없으면 빈 배열, F5). */
+  pollCommands(): Promise<DriverCommand[]>;
   /** 캐싱된 ServerInfo (port/token). */
   readonly serverInfo: ServerInfo;
 }
@@ -153,7 +169,9 @@ export function createOffice(deps: OfficeDeps): Office {
   const appendFileFn = deps.appendFileFn ?? ((p: string, data: string) => fs.appendFileSync(p, data));
 
   const info = readServerInfo(deps.homeDir, readFileFn);
-  const url = `http://127.0.0.1:${info.port}/api/hooks/claude`;
+  const base = `http://127.0.0.1:${info.port}`;
+  const url = `${base}/api/hooks/claude`;
+  const authHeaders = { Authorization: `Bearer ${info.authToken}` };
 
   return {
     serverInfo: info,
@@ -178,6 +196,27 @@ export function createOffice(deps: OfficeDeps): Office {
       mkdirFn(path.dirname(filePath));
       appendFileFn(filePath, `${JSON.stringify(initRecord())}\n`);
       return filePath;
+    },
+
+    async reportDriverState(state: DriverStateReport): Promise<void> {
+      const res = await fetchFn(`${base}/api/driver/state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify(state),
+        signal: AbortSignal.timeout(HOOK_TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`드라이버 상태 보고 실패: HTTP ${res.status}`);
+    },
+
+    async pollCommands(): Promise<DriverCommand[]> {
+      const res = await fetchFn(`${base}/api/driver/commands`, {
+        method: 'GET',
+        headers: { ...authHeaders },
+        signal: AbortSignal.timeout(HOOK_TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`명령 폴링 실패: HTTP ${res.status}`);
+      const data = (await res.json()) as { commands?: DriverCommand[] };
+      return Array.isArray(data.commands) ? data.commands : [];
     },
   };
 }

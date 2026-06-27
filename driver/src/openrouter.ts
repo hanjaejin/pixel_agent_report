@@ -11,6 +11,21 @@
 export const ACTIONS = ['read', 'write', 'run', 'rest'] as const;
 export type Action = (typeof ACTIONS)[number];
 
+/**
+ * OpenRouter HTTP 비정상 응답 에러(상태코드 포함).
+ * 상위(agent)가 status 로 영구 에러(모델/인증)와 일시 에러(레이트리밋/서버)를 구분해
+ * 모델 폴백 또는 백오프를 선택한다(F4, ADR-016).
+ */
+export class OpenRouterError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'OpenRouterError';
+  }
+}
+
 /** LLM 이 결정한 한 번의 행동. */
 export interface Decision {
   action: Action;
@@ -136,8 +151,8 @@ export function createOpenRouter(deps: OpenRouterDeps): OpenRouterClient {
       });
 
       if (!res.ok) {
-        // 429/5xx 등은 상위에서 백오프하도록 예외로 알린다.
-        throw new Error(`OpenRouter 호출 실패: HTTP ${res.status} (model=${model})`);
+        // 상태코드를 담아 던진다. 상위가 영구(모델/인증) vs 일시(레이트리밋/서버)를 구분.
+        throw new OpenRouterError(res.status, `OpenRouter 호출 실패: HTTP ${res.status} (model=${model})`);
       }
 
       const data = (await res.json()) as {

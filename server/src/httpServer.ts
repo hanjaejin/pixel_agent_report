@@ -10,6 +10,11 @@ import type { AgentStateStore } from './agentStateStore.js';
 import type { AssetCache, SetHooksEnabledSideEffect } from './clientMessageHandler.js';
 import { handleClientMessage } from './clientMessageHandler.js';
 import { HOOK_API_PREFIX, MAX_HOOK_BODY_SIZE } from './constants.js';
+import {
+  buildAgentModelsMessage,
+  DriverControlState,
+  type DriverModelReport,
+} from './driverControl.js';
 import type { AgentState } from './types.js';
 
 /** Options for creating the HTTP + WebSocket server. */
@@ -71,11 +76,15 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     });
   }
 
+  // Shared driver model-selection control state (F5). Created once per server.
+  const driverControl = new DriverControlState();
+
   // ── Routes ──────────────────────────────────────────────────
 
   registerHealthRoute(app);
   registerHookRoute(app, options);
-  registerWebSocketRoute(app, options);
+  registerDriverRoutes(app, options, driverControl);
+  registerWebSocketRoute(app, options, driverControl);
 
   // ── Listen ──────────────────────────────────────────────────
 
@@ -129,9 +138,50 @@ function registerHookRoute(app: FastifyInstance, options: HttpServerOptions): vo
   );
 }
 
+// ── Driver Control (F5: model selection) ───────────────────────
+
+function registerDriverRoutes(
+  app: FastifyInstance,
+  options: HttpServerOptions,
+  driverControl: DriverControlState,
+): void {
+  // Driver reports its agents' current models + selectable models.
+  app.post<{ Body: { availableModels?: unknown; agents?: unknown } }>(
+    '/api/driver/state',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      const body = request.body ?? {};
+      const availableModels = Array.isArray(body.availableModels)
+        ? body.availableModels.filter((m): m is string => typeof m === 'string')
+        : [];
+      const agents: DriverModelReport[] = Array.isArray(body.agents)
+        ? body.agents
+            .filter(
+              (a): a is DriverModelReport =>
+                !!a && typeof a.sessionId === 'string' && typeof a.model === 'string',
+            )
+            .map((a) => ({ sessionId: a.sessionId, model: a.model }))
+        : [];
+      driverControl.setState(availableModels, agents);
+      // Broadcast updated per-agent models to all connected webviews.
+      options.store.broadcast(buildAgentModelsMessage(options.store, driverControl));
+      reply.send('ok');
+    },
+  );
+
+  // Driver polls for pending model-change commands (and clears the queue).
+  app.get('/api/driver/commands', { preHandler: bearerAuth(options.token) }, async () => ({
+    commands: driverControl.drainCommands(),
+  }));
+}
+
 // ── WebSocket ──────────────────────────────────────────────────
 
-function registerWebSocketRoute(app: FastifyInstance, options: HttpServerOptions): void {
+function registerWebSocketRoute(
+  app: FastifyInstance,
+  options: HttpServerOptions,
+  driverControl: DriverControlState,
+): void {
   app.get('/ws', { websocket: true }, (socket, request) => {
     // In standalone mode (not embedded), skip auth for WebSocket connections.
     // The server binds to 127.0.0.1, so only local clients can connect.
@@ -188,6 +238,7 @@ function registerWebSocketRoute(app: FastifyInstance, options: HttpServerOptions
           runtime: options.runtime,
           cache: options.assetCache ?? null,
           onSetHooksEnabled: options.onSetHooksEnabled,
+          driverControl,
         });
       } catch {
         // Malformed JSON, ignore
